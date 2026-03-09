@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atx_tenx_count"
+version = "0.1.0"
+description = "Packaged CLI for the ATX/10x barcode mapping pipeline."
+readme = "PIPELINE_DEVIATIONS.md"
+requires-python = ">=3.11"
+dependencies = [
+  "matplotlib",
+  "numpy",
+  "pandas",
+  "polars",
+  "seaborn",
+]
+
+[project.scripts]
+atx_tenx_count = "atx_tenx_count.cli:main"
+
+[tool.setuptools]
+packages = ["atx_tenx_count"]

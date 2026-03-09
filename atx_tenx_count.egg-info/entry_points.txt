@@ -1,0 +1,2 @@
+[console_scripts]
+atx_tenx_count = atx_tenx_count.cli:main

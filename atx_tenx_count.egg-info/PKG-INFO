@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: atx_tenx_count
+Version: 0.1.0
+Summary: Packaged CLI for the ATX/10x barcode mapping pipeline.
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: matplotlib
+Requires-Dist: numpy
+Requires-Dist: pandas
+Requires-Dist: polars
+Requires-Dist: seaborn
+
+# TBD :)
