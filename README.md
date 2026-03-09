@@ -10,8 +10,6 @@ Goal: build a cRNA mapping workflow with fixed offsets, mismatch-tolerant barcod
 
 ## Example command
 
-Run this inside your activated Pixi environment or other Python environment where `atx_tenx_count` is installed:
-
 ```bash
 atx_tenx_count \
   --sample-name sample_01 \
@@ -19,7 +17,7 @@ atx_tenx_count \
   --r2-fastq /path/to/sample_R2.fastq.gz \
   --cell-barcodes /path/to/barcodes.tsv.gz \
   --mhc-ref /path/to/mhc_ref.csv \
-  --pep-ref /path/to/pep_ref.csv \
+  --pep-ref /path/to/pep_ref.csv \ #or instead use feature id table see below
   --out-dir /path/to/output \
   --skip-graphs
 ```
