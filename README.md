@@ -2,8 +2,6 @@
 
 For ATX v4.3 libraries.
 
-By Jim Asaki :)
-
 This repo packages the barcode-counting workflow as the `STARforge` Python distribution with the `atx_tenx_count` command-line entrypoint.
 
 Goal: build a cRNA mapping workflow with fixed offsets, mismatch-tolerant barcode mapping, cell/UMI correction, collision diagnostics, and global collision cleanup.
