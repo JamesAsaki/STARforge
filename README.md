@@ -25,9 +25,10 @@ Goal: build a cRNA mapping workflow with fixed offsets, mismatch-tolerant barcod
 - Mapping uses a block-based seed index rather than brute-force comparison
 - Cell barcodes are mapped with up to 1 mismatch against a user-supplied whitelist
 - In practice that whitelist is usually one of:
-  - Cell Ranger raw barcodes
-  - Cell Ranger filtered barcodes
-  - A 10x 5' barcode whitelist
+    - Preferred: map to 10x GEX cellranger barcode list (outfolder -> outs -> raw_feature_bc_matrix -> barcodes.tsv.gz) contains empty droplets (takes an hour)
+    - map to 10x GEX cellranger filtered barcode list (outfolder -> outs -> filtered_feature_bc_matrix -> barcodes.tsv.gz) (fastest)
+    - map to 10x 5' cell barcode list (takes hours)
+    - no mapping, collapse on 1 hamming distance #not implemented
 - Exact/mismatch buckets and mapping diagnostics are printed
 
 ### Stage 3: within-cell-feature UMI collapse
@@ -46,7 +47,7 @@ You can provide references in one of two ways.
 
 ### Option 1: separate peptide and MHC barcode lists
 
-This is usually the better fit for many-on-many libraries.
+This is for many-on-many libraries (all allele on all peptides).
 
 Peptide list:
 
@@ -66,7 +67,7 @@ A*02:01,NNNNNNNNNNNNNNN
 
 ### Option 2: feature barcode list
 
-This is usually the better fit when peptide cloning is allele-specific.
+This is the better fit when peptide cloning is allele-specific.
 
 Rules:
 
