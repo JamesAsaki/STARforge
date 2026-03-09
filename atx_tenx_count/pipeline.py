@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import builtins
+import contextlib
 import gzip
 import re
+import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -142,6 +145,67 @@ for q in range(94):
     _Q_PROB[q + 33] = 1.0 - 10 ** (-q / 10.0)
 
 
+class _PipelineLogWriter:
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        self.handle = None
+        self._skip_next_blank_line = False
+
+    def open(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.handle = self.path.open("w", encoding="utf-8")
+
+    def close(self) -> None:
+        if self.handle is not None:
+            self.handle.close()
+            self.handle = None
+
+    def write(self, rendered: str, *, file: Any, end: str, flush: bool) -> None:
+        if self.handle is None or file not in (None, sys.stdout):
+            return
+
+        # Skip progress-style prints in the log so the file stays readable.
+        if flush or end != "\n" or "\r" in rendered:
+            self._skip_next_blank_line = True
+            return
+
+        if self._skip_next_blank_line and rendered == "\n":
+            self._skip_next_blank_line = False
+            return
+
+        self._skip_next_blank_line = False
+        self.handle.write(rendered)
+        self.handle.flush()
+
+
+_PIPELINE_LOG_WRITER: _PipelineLogWriter | None = None
+
+
+@contextlib.contextmanager
+def pipeline_log_session(path: Path):
+    global _PIPELINE_LOG_WRITER
+
+    previous_writer = _PIPELINE_LOG_WRITER
+    writer = _PipelineLogWriter(path)
+    writer.open()
+    _PIPELINE_LOG_WRITER = writer
+    try:
+        yield
+    finally:
+        writer.close()
+        _PIPELINE_LOG_WRITER = previous_writer
+
+
+def _pipeline_print(*args: object, sep: str = " ", end: str = "\n", file: Any = None, flush: bool = False) -> None:
+    rendered = sep.join(str(arg) for arg in args) + end
+    builtins.print(*args, sep=sep, end=end, file=file, flush=flush)
+    if _PIPELINE_LOG_WRITER is not None:
+        _PIPELINE_LOG_WRITER.write(rendered, file=file, end=end, flush=flush)
+
+
+print = _pipeline_print
+
+
 @dataclass(slots=True)
 class PipelineConfig:
     sample_name: str
@@ -210,6 +274,10 @@ class PipelineConfig:
     @property
     def parquet_04_directed_ratio_events(self) -> Path:
         return self.out_dir / f"{self.sample_name}_04_directed_ratio_events.parquet"
+
+    @property
+    def log_path(self) -> Path:
+        return self.out_dir / f"{self.sample_name}_pipeline.log"
 
 
 def empty_dataframe(schema: dict[str, pl.DataType]) -> pl.DataFrame:
@@ -1696,35 +1764,37 @@ def stage05_summary(
 
 
 def run_pipeline(config: PipelineConfig) -> dict[str, Any]:
-    print(f"R1: {config.r1_fastq}")
-    print(f"R2: {config.r2_fastq}")
-    print(f"Output dir: {config.out_dir}")
+    with pipeline_log_session(config.log_path):
+        print(f"STARforge log: {config.log_path}")
+        print(f"R1: {config.r1_fastq}")
+        print(f"R2: {config.r2_fastq}")
+        print(f"Output dir: {config.out_dir}")
 
-    mhc_ref_df, pep_ref_df, fb_ref_df = load_references(config)
-    parsed_df, parse_qc, stage01_report = stage01_parse(config)
-    df_mapped, stage02_report = stage02_map(config, parsed_df, mhc_ref_df, pep_ref_df, fb_ref_df)
-    df_umi_m2, group_metrics_df_m2, collapse_events_df_m2, stage03_report = stage03_collapse(config, df_mapped)
-    stage03_diagnostics(config, df_umi_m2, group_metrics_df_m2, collapse_events_df_m2)
-    observed_collision_summary_df = stage04_observed_collision(config, df_umi_m2)
-    df_final_m2, collision_metrics_df_m2, directed_ratio_df_m2, stage04_report = stage04_resolve(
-        config,
-        df_umi_m2,
-        mhc_ref_df,
-        pep_ref_df,
-    )
-    stage04_diagnostics(config, df_final_m2, collision_metrics_df_m2, directed_ratio_df_m2)
-    stage_flow_df, uniqueness_df = stage05_summary(parsed_df, df_mapped, df_umi_m2, df_final_m2)
+        mhc_ref_df, pep_ref_df, fb_ref_df = load_references(config)
+        parsed_df, parse_qc, stage01_report = stage01_parse(config)
+        df_mapped, stage02_report = stage02_map(config, parsed_df, mhc_ref_df, pep_ref_df, fb_ref_df)
+        df_umi_m2, group_metrics_df_m2, collapse_events_df_m2, stage03_report = stage03_collapse(config, df_mapped)
+        stage03_diagnostics(config, df_umi_m2, group_metrics_df_m2, collapse_events_df_m2)
+        observed_collision_summary_df = stage04_observed_collision(config, df_umi_m2)
+        df_final_m2, collision_metrics_df_m2, directed_ratio_df_m2, stage04_report = stage04_resolve(
+            config,
+            df_umi_m2,
+            mhc_ref_df,
+            pep_ref_df,
+        )
+        stage04_diagnostics(config, df_final_m2, collision_metrics_df_m2, directed_ratio_df_m2)
+        stage_flow_df, uniqueness_df = stage05_summary(parsed_df, df_mapped, df_umi_m2, df_final_m2)
 
-    return {
-        "parse_qc": parse_qc,
-        "stage01_report": stage01_report,
-        "stage02_report": stage02_report,
-        "stage03_report": stage03_report,
-        "stage04_report": stage04_report,
-        "observed_collision_summary_df": observed_collision_summary_df,
-        "stage_flow_df": stage_flow_df,
-        "uniqueness_df": uniqueness_df,
-        "final_df": df_final_m2,
-        "collision_metrics_df": collision_metrics_df_m2,
-        "directed_ratio_df": directed_ratio_df_m2,
-    }
+        return {
+            "parse_qc": parse_qc,
+            "stage01_report": stage01_report,
+            "stage02_report": stage02_report,
+            "stage03_report": stage03_report,
+            "stage04_report": stage04_report,
+            "observed_collision_summary_df": observed_collision_summary_df,
+            "stage_flow_df": stage_flow_df,
+            "uniqueness_df": uniqueness_df,
+            "final_df": df_final_m2,
+            "collision_metrics_df": collision_metrics_df_m2,
+            "directed_ratio_df": directed_ratio_df_m2,
+        }

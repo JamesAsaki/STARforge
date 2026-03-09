@@ -1,4 +1,4 @@
-"""bc_mapping_pipeline package."""
+"""STARforge package."""
 
 __all__ = ["PipelineConfig", "run_pipeline"]
 

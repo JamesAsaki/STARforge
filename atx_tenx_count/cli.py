@@ -7,13 +7,18 @@ from pathlib import Path
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="atx_tenx_count",
-        description="Run the ATX/10x barcode mapping pipeline end to end.",
+        description="Run the STARforge ATX/10x barcode-counting pipeline end to end.",
     )
     parser.add_argument("--sample-name", required=True, help="Sample name used in output filenames.")
     parser.add_argument("--r1-fastq", required=True, type=Path, help="Path to the R1 FASTQ.gz file.")
     parser.add_argument("--r2-fastq", required=True, type=Path, help="Path to the R2 FASTQ.gz file.")
     parser.add_argument("--cell-barcodes", required=True, type=Path, help="Path to the 10x cell barcode whitelist.")
-    parser.add_argument("--out-dir", required=True, type=Path, help="Directory for output parquet files and plots.")
+    parser.add_argument(
+        "--out-dir",
+        required=True,
+        type=Path,
+        help="Directory for output parquet files, plots, and the pipeline log.",
+    )
     parser.add_argument("--fb-ref", type=Path, default=None, help="Feature barcode whitelist CSV.")
     parser.add_argument("--mhc-ref", type=Path, default=None, help="MHC barcode whitelist CSV.")
     parser.add_argument("--pep-ref", type=Path, default=None, help="Peptide barcode whitelist CSV.")
