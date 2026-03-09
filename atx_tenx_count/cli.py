@@ -64,9 +64,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def args_to_config(args: argparse.Namespace):
-    from .pipeline import PipelineConfig
+    from .pipeline import build_pipeline_config
 
-    return PipelineConfig(
+    return build_pipeline_config(
         sample_name=args.sample_name,
         r1_fastq=args.r1_fastq,
         r2_fastq=args.r2_fastq,

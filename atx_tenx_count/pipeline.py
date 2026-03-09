@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import builtins
-import contextlib
 import gzip
 import re
 import sys
 from collections import Counter, defaultdict
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -53,7 +50,7 @@ STAGE_REPORT_ENTITIES = {
 R2_PRE26 = "GTGCCGTCCGTGTCCATTCACTCGAG"
 BASES = "ACGT"
 
-_PARSED_SCHEMA: dict[str, pl.DataType] = {
+_PARSED_SCHEMA: dict[str, pl.DataType] = { #polars df column structure
     "cell_bc": pl.String,
     "umi": pl.String,
     "mhc_bc": pl.String,
@@ -67,7 +64,7 @@ _PARSED_SCHEMA: dict[str, pl.DataType] = {
     "hekumi_q": pl.Int64,
 }
 
-_LOOKUP_SCHEMA = {
+_LOOKUP_SCHEMA = { #polars df column structure
     "bc": pl.String,
     "id": pl.String,
     "mm": pl.Int64,
@@ -75,7 +72,7 @@ _LOOKUP_SCHEMA = {
     "match": pl.String,
 }
 
-_UMI_MAP_SCHEMA: dict[str, pl.DataType] = {
+_UMI_MAP_SCHEMA: dict[str, pl.DataType] = { #polars df column structure
     "cell_id": pl.String,
     "mhc_id": pl.String,
     "pep_id": pl.String,
@@ -83,7 +80,7 @@ _UMI_MAP_SCHEMA: dict[str, pl.DataType] = {
     "umi_collapsed": pl.String,
 }
 
-_STAGE03_EVENT_SCHEMA: dict[str, pl.DataType] = {
+_STAGE03_EVENT_SCHEMA: dict[str, pl.DataType] = { #polars df column structure
     "cell_id": pl.String,
     "mhc_id": pl.String,
     "pep_id": pl.String,
@@ -96,7 +93,7 @@ _STAGE03_EVENT_SCHEMA: dict[str, pl.DataType] = {
     "ratio": pl.Float64,
 }
 
-_STAGE03_GROUP_SCHEMA: dict[str, pl.DataType] = {
+_STAGE03_GROUP_SCHEMA: dict[str, pl.DataType] = { #polars df column structure
     "cell_id": pl.String,
     "mhc_id": pl.String,
     "pep_id": pl.String,
@@ -107,8 +104,8 @@ _STAGE03_GROUP_SCHEMA: dict[str, pl.DataType] = {
     "n_umi_after": pl.Int64,
 }
 
-_STAGE03_SCHEMA: dict[str, pl.DataType] = {
-    "cell_id": pl.String,
+_STAGE03_SCHEMA: dict[str, pl.DataType] = { #polars df column structure
+    "cell_id": pl.String, 
     "umi": pl.String,
     "mhc_bc": pl.String,
     "pep_bc": pl.String,
@@ -121,7 +118,7 @@ _STAGE03_SCHEMA: dict[str, pl.DataType] = {
     "reads": pl.Int64,
 }
 
-_STAGE04_COLLISION_SCHEMA: dict[str, pl.DataType] = {
+_STAGE04_COLLISION_SCHEMA: dict[str, pl.DataType] = { #polars df column structure
     "cell_id": pl.String,
     "umi": pl.String,
     "top_feature": pl.String,
@@ -132,152 +129,134 @@ _STAGE04_COLLISION_SCHEMA: dict[str, pl.DataType] = {
     "action": pl.String,
 }
 
-_STAGE04_DIRECTED_RATIO_SCHEMA: dict[str, pl.DataType] = {
+_STAGE04_DIRECTED_RATIO_SCHEMA: dict[str, pl.DataType] = { #polars df column structure
     "winner_feature": pl.String,
     "loser_feature": pl.String,
     "ratio": pl.Float64,
 }
 
-_STAGE04_SCHEMA = _STAGE03_SCHEMA.copy()
+_STAGE04_SCHEMA = _STAGE03_SCHEMA.copy() #the same
 
 _Q_PROB = [0.0] * 128
 for q in range(94):
     _Q_PROB[q + 33] = 1.0 - 10 ** (-q / 10.0)
 
 
-class _PipelineLogWriter:
-    def __init__(self, path: Path) -> None:
-        self.path = Path(path)
-        self.handle = None
-        self._skip_next_blank_line = False
+PipelineConfigData = dict[str, Any]
 
-    def open(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.handle = self.path.open("w", encoding="utf-8")
-
-    def close(self) -> None:
-        if self.handle is not None:
-            self.handle.close()
-            self.handle = None
-
-    def write(self, rendered: str, *, file: Any, end: str, flush: bool) -> None:
-        if self.handle is None or file not in (None, sys.stdout):
-            return
-
-        # Skip progress-style prints in the log so the file stays readable.
-        if flush or end != "\n" or "\r" in rendered:
-            self._skip_next_blank_line = True
-            return
-
-        if self._skip_next_blank_line and rendered == "\n":
-            self._skip_next_blank_line = False
-            return
-
-        self._skip_next_blank_line = False
-        self.handle.write(rendered)
-        self.handle.flush()
+_PIPELINE_LOG_HANDLE = None
+_PIPELINE_LOG_SKIP_NEXT_BLANK_LINE = False
 
 
-_PIPELINE_LOG_WRITER: _PipelineLogWriter | None = None
+def start_pipeline_logging(log_path: Path) -> None:
+    global _PIPELINE_LOG_HANDLE, _PIPELINE_LOG_SKIP_NEXT_BLANK_LINE
+
+    stop_pipeline_logging()
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    _PIPELINE_LOG_HANDLE = log_path.open("w", encoding="utf-8")
+    _PIPELINE_LOG_SKIP_NEXT_BLANK_LINE = False
 
 
-@contextlib.contextmanager
-def pipeline_log_session(path: Path):
-    global _PIPELINE_LOG_WRITER
+def stop_pipeline_logging() -> None:
+    global _PIPELINE_LOG_HANDLE
 
-    previous_writer = _PIPELINE_LOG_WRITER
-    writer = _PipelineLogWriter(path)
-    writer.open()
-    _PIPELINE_LOG_WRITER = writer
-    try:
-        yield
-    finally:
-        writer.close()
-        _PIPELINE_LOG_WRITER = previous_writer
+    if _PIPELINE_LOG_HANDLE is not None:
+        _PIPELINE_LOG_HANDLE.close()
+        _PIPELINE_LOG_HANDLE = None
 
 
-def _pipeline_print(*args: object, sep: str = " ", end: str = "\n", file: Any = None, flush: bool = False) -> None:
+def log_print(*args: object, sep: str = " ", end: str = "\n", file: Any = None, flush: bool = False) -> None:
+    global _PIPELINE_LOG_SKIP_NEXT_BLANK_LINE
+
     rendered = sep.join(str(arg) for arg in args) + end
-    builtins.print(*args, sep=sep, end=end, file=file, flush=flush)
-    if _PIPELINE_LOG_WRITER is not None:
-        _PIPELINE_LOG_WRITER.write(rendered, file=file, end=end, flush=flush)
+    print(*args, sep=sep, end=end, file=file, flush=flush)
+    if _PIPELINE_LOG_HANDLE is None or file not in (None, sys.stdout):
+        return
+
+    # Skip progress-style prints in the log so the file stays readable.
+    if flush or end != "\n" or "\r" in rendered:
+        _PIPELINE_LOG_SKIP_NEXT_BLANK_LINE = True
+        return
+
+    if _PIPELINE_LOG_SKIP_NEXT_BLANK_LINE and rendered == "\n":
+        _PIPELINE_LOG_SKIP_NEXT_BLANK_LINE = False
+        return
+
+    _PIPELINE_LOG_SKIP_NEXT_BLANK_LINE = False
+    _PIPELINE_LOG_HANDLE.write(rendered)
+    _PIPELINE_LOG_HANDLE.flush()
 
 
-print = _pipeline_print
+def build_pipeline_config(
+    sample_name: str,
+    r1_fastq: Path,
+    r2_fastq: Path,
+    cell_barcodes: Path,
+    out_dir: Path,
+    fb_ref: Path | None = None,
+    mhc_ref: Path | None = None,
+    pep_ref: Path | None = None,
+    max_reads_parse: int | None = None,
+    save_intermediates: bool = True,
+    generate_graphs: bool = True,
+    plot_dpi: int = 60,
+    require_strict_constants: bool = True,
+    umi_collapse_max_passes: int = 3,
+    umi_min_ratio: float = 5.0,
+    collision_min_ratio: float = 5.0,
+    collision_min_top_reads: int = 3,
+    min_avg_q: float = 99.05,
+) -> PipelineConfigData:
+    config: PipelineConfigData = {
+        "sample_name": sample_name,
+        "r1_fastq": Path(r1_fastq),
+        "r2_fastq": Path(r2_fastq),
+        "cell_barcodes": Path(cell_barcodes),
+        "out_dir": Path(out_dir),
+        "fb_ref": Path(fb_ref) if fb_ref is not None else None,
+        "mhc_ref": Path(mhc_ref) if mhc_ref is not None else None,
+        "pep_ref": Path(pep_ref) if pep_ref is not None else None,
+        "max_reads_parse": max_reads_parse,
+        "save_intermediates": save_intermediates,
+        "generate_graphs": generate_graphs,
+        "plot_dpi": plot_dpi,
+        "require_strict_constants": require_strict_constants,
+        "umi_collapse_max_passes": umi_collapse_max_passes,
+        "umi_min_ratio": umi_min_ratio,
+        "collision_min_ratio": collision_min_ratio,
+        "collision_min_top_reads": collision_min_top_reads,
+        "min_avg_q": min_avg_q,
+    }
+
+    sample_name = config["sample_name"]
+    config['out_dir'].mkdir(parents=True, exist_ok=True)
+    config['plot_dir'] = config['out_dir'] / "plots"
+    if config['generate_graphs']:
+        config['plot_dir'].mkdir(parents=True, exist_ok=True)
+
+    config['parquet_01'] = config['out_dir'] / f"{sample_name}_01_parsed.parquet"
+    config['parquet_02'] = config['out_dir'] / f"{sample_name}_02_mapped.parquet"
+    config['parquet_03'] = config['out_dir'] / f"{sample_name}_03_umi_collapsed.parquet"
+    config['parquet_03_group_metrics'] = (
+        config['out_dir'] / f"{sample_name}_03_umi_group_metrics.parquet"
+    )
+    config['parquet_03_collapse_events'] = (
+        config['out_dir'] / f"{sample_name}_03_umi_collapse_events.parquet"
+    )
+    config['parquet_04'] = config['out_dir'] / f"{sample_name}_04_global_collision_resolved.parquet"
+    config['parquet_04_collision_metrics'] = (
+        config['out_dir'] / f"{sample_name}_04_collision_metrics.parquet"
+    )
+    config['parquet_04_directed_ratio_events'] = (
+        config['out_dir'] / f"{sample_name}_04_directed_ratio_events.parquet"
+    )
+    config['log_path'] = config['out_dir'] / f"{sample_name}_pipeline.log"
+    return config
 
 
-@dataclass(slots=True)
-class PipelineConfig:
-    sample_name: str
-    r1_fastq: Path
-    r2_fastq: Path
-    cell_barcodes: Path
-    out_dir: Path
-    fb_ref: Path | None = None
-    mhc_ref: Path | None = None
-    pep_ref: Path | None = None
-    max_reads_parse: int | None = None
-    save_intermediates: bool = True
-    generate_graphs: bool = True
-    plot_dpi: int = 60
-    require_strict_constants: bool = True
-    umi_collapse_max_passes: int = 3
-    umi_min_ratio: float = 5.0
-    collision_min_ratio: float = 5.0
-    collision_min_top_reads: int = 3
-    min_avg_q: float = 99.05
-
-    def __post_init__(self) -> None:
-        self.r1_fastq = Path(self.r1_fastq)
-        self.r2_fastq = Path(self.r2_fastq)
-        self.cell_barcodes = Path(self.cell_barcodes)
-        self.out_dir = Path(self.out_dir)
-        self.fb_ref = Path(self.fb_ref) if self.fb_ref is not None else None
-        self.mhc_ref = Path(self.mhc_ref) if self.mhc_ref is not None else None
-        self.pep_ref = Path(self.pep_ref) if self.pep_ref is not None else None
-        self.out_dir.mkdir(parents=True, exist_ok=True)
-        if self.generate_graphs:
-            self.plot_dir.mkdir(parents=True, exist_ok=True)
-
-    @property
-    def plot_dir(self) -> Path:
-        return self.out_dir / "plots"
-
-    @property
-    def parquet_01(self) -> Path:
-        return self.out_dir / f"{self.sample_name}_01_parsed.parquet"
-
-    @property
-    def parquet_02(self) -> Path:
-        return self.out_dir / f"{self.sample_name}_02_mapped.parquet"
-
-    @property
-    def parquet_03(self) -> Path:
-        return self.out_dir / f"{self.sample_name}_03_umi_collapsed.parquet"
-
-    @property
-    def parquet_03_group_metrics(self) -> Path:
-        return self.out_dir / f"{self.sample_name}_03_umi_group_metrics.parquet"
-
-    @property
-    def parquet_03_collapse_events(self) -> Path:
-        return self.out_dir / f"{self.sample_name}_03_umi_collapse_events.parquet"
-
-    @property
-    def parquet_04(self) -> Path:
-        return self.out_dir / f"{self.sample_name}_04_global_collision_resolved.parquet"
-
-    @property
-    def parquet_04_collision_metrics(self) -> Path:
-        return self.out_dir / f"{self.sample_name}_04_collision_metrics.parquet"
-
-    @property
-    def parquet_04_directed_ratio_events(self) -> Path:
-        return self.out_dir / f"{self.sample_name}_04_directed_ratio_events.parquet"
-
-    @property
-    def log_path(self) -> Path:
-        return self.out_dir / f"{self.sample_name}_pipeline.log"
+def PipelineConfig(*args: Any, **kwargs: Any) -> PipelineConfigData:
+    return build_pipeline_config(*args, **kwargs)
 
 
 def empty_dataframe(schema: dict[str, pl.DataType]) -> pl.DataFrame:
@@ -379,7 +358,7 @@ def parse_fastq_and_aggregate(
                 id2 = _fastq_read_id(h2)
                 if id1 != id2:
                     raise ValueError(f"R1/R2 header mismatch: {id1} != {id2}")
-                print(f"\rProgress: {qc['records_seen']} reads", end="", flush=True)
+                log_print(f"\rProgress: {qc['records_seen']} reads", end="", flush=True)
 
             if len(s1) != 28 or len(s2) != 90:
                 qc["filtered_length"] += 1
@@ -419,7 +398,7 @@ def parse_fastq_and_aggregate(
                 sums[4] += hek_q
 
     if qc["records_seen"] >= 100_000:
-        print()
+        log_print()
 
     rows: list[dict[str, Any]] = []
     low_q = 0
@@ -560,12 +539,12 @@ def map_unique_barcodes(
         )
 
         if i % 1_000 == 0:
-            print(f"\r{label}: mapped {i:,}/{n_total:,}", end="", flush=True)
+            log_print(f"\r{label}: mapped {i:,}/{n_total:,}", end="", flush=True)
 
     if n_total >= 1_000:
-        print()
-    print(f"{label} status counts (unique query):", dict(status_ct))
-    print(f"{label} mismatch counts (unique query):", dict(mm_ct))
+        log_print()
+    log_print(f"{label} status counts (unique query):", dict(status_ct))
+    log_print(f"{label} mismatch counts (unique query):", dict(mm_ct))
 
     if not records:
         return pl.DataFrame(
@@ -676,7 +655,7 @@ def stage_plot_path(plot_root: Path, stage_key: str, sample_name: str, plot_slug
 def stage_report(
     df: pl.DataFrame,
     stage_key: str,
-    config: PipelineConfig,
+    config: PipelineConfigData,
     extra_tables: list[tuple[str, pl.DataFrame | dict[str, object]]] | None = None,
 ) -> dict[str, Any]:
     cols = set(df.columns)
@@ -710,10 +689,10 @@ def stage_report(
 
     summary_df = pl.DataFrame(summary_rows)
 
-    print(STAGE_LABELS.get(stage_key, stage_key))
-    print("rows", rows)
-    print("total_reads", total_reads if total_reads is not None else "NA")
-    print(summary_df)
+    log_print(STAGE_LABELS.get(stage_key, stage_key))
+    log_print("rows", rows)
+    log_print("total_reads", total_reads if total_reads is not None else "NA")
+    log_print(summary_df)
 
     normalized_extra_tables: list[tuple[str, pl.DataFrame]] = []
     for title, table in extra_tables or []:
@@ -721,12 +700,12 @@ def stage_report(
             table_df = metrics_mapping_df(table)
         else:
             table_df = table
-        print(title)
-        print(table_df if table_df.height else "no rows")
+        log_print(title)
+        log_print(table_df if table_df.height else "no rows")
         normalized_extra_tables.append((title, table_df))
 
     plot_paths: dict[str, Path | None] = {}
-    if not config.generate_graphs:
+    if not config['generate_graphs']:
         return {
             "stage_key": stage_key,
             "rows": rows,
@@ -737,11 +716,11 @@ def stage_report(
         }
 
     def _finalize_figure(plot_slug: str) -> None:
-        plot_path = stage_plot_path(config.plot_dir, stage_key, config.sample_name, plot_slug)
+        plot_path = stage_plot_path(config['plot_dir'], stage_key, config['sample_name'], plot_slug)
         plt.tight_layout()
         plt.savefig(plot_path)
         plt.close()
-        print("Saved", plot_path)
+        log_print("Saved", plot_path)
         plot_paths[plot_slug] = plot_path
 
     def _histplot_values(
@@ -767,7 +746,7 @@ def stage_report(
         else:
             bins = n_bins
 
-        plt.figure(figsize=(8, 4), dpi=config.plot_dpi)
+        plt.figure(figsize=(8, 4), dpi=config['plot_dpi'])
         sns.histplot(arr, bins=bins)
         plt.title(title)
         plt.xlabel(xlabel)
@@ -826,7 +805,7 @@ def stage_report(
 
     if has_reads and {"umi", "umi_q"}.issubset(cols):
         umi_reads = df.group_by("umi").agg(pl.sum("reads").alias("reads"), pl.mean("umi_q").alias("q"))
-        plt.figure(figsize=(8, 8), dpi=config.plot_dpi)
+        plt.figure(figsize=(8, 8), dpi=config['plot_dpi'])
         sns.scatterplot(data=umi_reads.to_pandas(), x="reads", y="q")
         plt.title("Reads per UMI by quality")
         plt.xlabel("Reads")
@@ -900,23 +879,23 @@ def write_if_enabled(df: pl.DataFrame, path: Path, enabled: bool) -> None:
     if not enabled:
         return
     df.write_parquet(path)
-    print("Wrote", path)
+    log_print("Wrote", path)
 
 
-def load_references(config: PipelineConfig) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame | None]:
-    if config.fb_ref:
-        if config.mhc_ref or config.pep_ref:
+def load_references(config: PipelineConfigData) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame | None]:
+    if config['fb_ref']:
+        if config['mhc_ref'] or config['pep_ref']:
             raise ValueError("Invalid config: fb_ref cannot be provided together with mhc_ref or pep_ref.")
     else:
-        if config.mhc_ref and config.pep_ref:
+        if config['mhc_ref'] and config['pep_ref']:
             pass
-        elif config.mhc_ref or config.pep_ref:
+        elif config['mhc_ref'] or config['pep_ref']:
             raise ValueError("Invalid config: Both mhc_ref and pep_ref must be provided together.")
         else:
             raise ValueError("Invalid config: Provide either fb_ref alone OR both mhc_ref and pep_ref.")
 
-    if config.fb_ref:
-        fb_ref_df = pl.read_csv(config.fb_ref)
+    if config['fb_ref']:
+        fb_ref_df = pl.read_csv(config['fb_ref'])
         mhc_ref_df, pep_ref_df = parse_fb(fb_ref_df)
         reference_summary_df = metrics_mapping_df(
             {
@@ -927,8 +906,8 @@ def load_references(config: PipelineConfig) -> tuple[pl.DataFrame, pl.DataFrame,
         )
     else:
         fb_ref_df = None
-        mhc_ref_df = pl.read_csv(config.mhc_ref)
-        pep_ref_df = pl.read_csv(config.pep_ref)
+        mhc_ref_df = pl.read_csv(config['mhc_ref'])
+        pep_ref_df = pl.read_csv(config['pep_ref'])
         reference_summary_df = metrics_mapping_df(
             {
                 "mhc_id": mhc_ref_df["mhc_id"].n_unique(),
@@ -936,19 +915,19 @@ def load_references(config: PipelineConfig) -> tuple[pl.DataFrame, pl.DataFrame,
             }
         )
 
-    print("Reference summary")
-    print(reference_summary_df)
+    log_print("Reference summary")
+    log_print(reference_summary_df)
     return mhc_ref_df, pep_ref_df, fb_ref_df
 
 
-def stage01_parse(config: PipelineConfig) -> tuple[pl.DataFrame, Counter, dict[str, Any]]:
+def stage01_parse(config: PipelineConfigData) -> tuple[pl.DataFrame, Counter, dict[str, Any]]:
     parsed_df, parse_qc = parse_fastq_and_aggregate(
-        config.r1_fastq,
-        config.r2_fastq,
-        require_constants=config.require_strict_constants,
-        max_reads=config.max_reads_parse,
+        config['r1_fastq'],
+        config['r2_fastq'],
+        require_constants=config['require_strict_constants'],
+        max_reads=config['max_reads_parse'],
         track_quality=True,
-        min_avg_q=config.min_avg_q,
+        min_avg_q=config['min_avg_q'],
     )
 
     rows = parsed_df.height
@@ -983,7 +962,7 @@ def stage01_parse(config: PipelineConfig) -> tuple[pl.DataFrame, Counter, dict[s
         }
     )
 
-    write_if_enabled(parsed_df, config.parquet_01, config.save_intermediates)
+    write_if_enabled(parsed_df, config['parquet_01'], config['save_intermediates'])
     report = stage_report(
         parsed_df,
         "01_parsed",
@@ -994,14 +973,14 @@ def stage01_parse(config: PipelineConfig) -> tuple[pl.DataFrame, Counter, dict[s
 
 
 def stage02_map(
-    config: PipelineConfig,
+    config: PipelineConfigData,
     parsed_df: pl.DataFrame,
     mhc_ref_df: pl.DataFrame,
     pep_ref_df: pl.DataFrame,
     fb_ref_df: pl.DataFrame | None,
 ) -> tuple[pl.DataFrame, dict[str, Any]]:
     cellbc_ref = pl.read_csv(
-        config.cell_barcodes,
+        config['cell_barcodes'],
         separator="\t",
         has_header=False,
         new_columns=["bc_ref"],
@@ -1016,7 +995,7 @@ def stage02_map(
     unique_mhc_queries = parsed_df["mhc_bc"].unique().to_list()
     unique_cellbc_queries = parsed_df["cell_bc"].unique().to_list()
 
-    print("Begin pep mapping")
+    log_print("Begin pep mapping")
     pep_lookup_df = map_unique_barcodes(
         unique_pep_queries,
         pep_seq_to_id,
@@ -1032,7 +1011,7 @@ def stage02_map(
         }
     )
 
-    print("Begin mhc mapping")
+    log_print("Begin mhc mapping")
     mhc_lookup_df = map_unique_barcodes(
         unique_mhc_queries,
         mhc_seq_to_id,
@@ -1048,7 +1027,7 @@ def stage02_map(
         }
     )
 
-    print("Begin cellbc mapping")
+    log_print("Begin cellbc mapping")
     cellbc_lookup_df = map_unique_barcodes(
         unique_cellbc_queries,
         cellbarcode_map,
@@ -1147,7 +1126,7 @@ def stage02_map(
         {"rows_dropped_for_invalid_feature_combinations": rows_dropped_invalid_features}
     )
 
-    write_if_enabled(df_mapped, config.parquet_02, config.save_intermediates)
+    write_if_enabled(df_mapped, config['parquet_02'], config['save_intermediates'])
     report = stage_report(
         df_mapped,
         "02_mapped",
@@ -1170,7 +1149,7 @@ def stage02_map(
     return df_mapped, report
 
 
-def stage03_collapse(config: PipelineConfig, df_mapped: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, dict[str, Any]]:
+def stage03_collapse(config: PipelineConfigData, df_mapped: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, dict[str, Any]]:
     group_umi_df_m2 = (
         df_mapped.group_by(["cell_id", "mhc_id", "pep_id", "feature_id", "umi"]).agg(pl.sum("reads").alias("umi_reads"))
     )
@@ -1190,8 +1169,8 @@ def stage03_collapse(config: PipelineConfig, df_mapped: pl.DataFrame) -> tuple[p
         feature_id = group_feature_m2[(cell_id, mhc_id, pep_id)]
         mapping, events, final_counts = collapse_umis_iterative(
             umi_counts,
-            min_ratio=config.umi_min_ratio,
-            max_passes=config.umi_collapse_max_passes,
+            min_ratio=config['umi_min_ratio'],
+            max_passes=config['umi_collapse_max_passes'],
         )
 
         umi_map_rows_m2.extend(
@@ -1252,9 +1231,9 @@ def stage03_collapse(config: PipelineConfig, df_mapped: pl.DataFrame) -> tuple[p
     if df_umi_m2.height == 0:
         df_umi_m2 = empty_dataframe(_STAGE03_SCHEMA)
 
-    write_if_enabled(group_metrics_df_m2, config.parquet_03_group_metrics, config.save_intermediates)
-    write_if_enabled(collapse_events_df_m2, config.parquet_03_collapse_events, config.save_intermediates)
-    write_if_enabled(df_umi_m2, config.parquet_03, config.save_intermediates)
+    write_if_enabled(group_metrics_df_m2, config['parquet_03_group_metrics'], config['save_intermediates'])
+    write_if_enabled(collapse_events_df_m2, config['parquet_03_collapse_events'], config['save_intermediates'])
+    write_if_enabled(df_umi_m2, config['parquet_03'], config['save_intermediates'])
 
     stage03_summary_df = metrics_mapping_df(
         {
@@ -1274,62 +1253,62 @@ def stage03_collapse(config: PipelineConfig, df_mapped: pl.DataFrame) -> tuple[p
 
 
 def stage03_diagnostics(
-    config: PipelineConfig,
+    config: PipelineConfigData,
     df_umi_m2: pl.DataFrame,
     group_metrics_df_m2: pl.DataFrame,
     collapse_events_df_m2: pl.DataFrame,
 ) -> None:
-    print("Stage 03 diagnostics")
-    print("df_umi_m2 shape=", df_umi_m2.shape)
-    print("group_metrics_df_m2 shape=", group_metrics_df_m2.shape)
-    print("collapse_events_df_m2 shape=", collapse_events_df_m2.shape)
+    log_print("Stage 03 diagnostics")
+    log_print("df_umi_m2 shape=", df_umi_m2.shape)
+    log_print("group_metrics_df_m2 shape=", group_metrics_df_m2.shape)
+    log_print("collapse_events_df_m2 shape=", collapse_events_df_m2.shape)
 
     feature_summary = df_umi_m2.group_by("feature_id").agg(pl.n_unique("umi").alias("n_umi")).sort("n_umi", descending=True)
     top20_pl = feature_summary.head(20)
     bottom20_pl = feature_summary.tail(20).sort("n_umi")
-    print("Top 20 features by UMI")
-    print(top20_pl)
-    print("Bottom 20 features by UMI")
-    print(bottom20_pl)
+    log_print("Top 20 features by UMI")
+    log_print(top20_pl)
+    log_print("Bottom 20 features by UMI")
+    log_print(bottom20_pl)
 
-    if not config.generate_graphs:
+    if not config['generate_graphs']:
         return
 
-    stage03_plot_dir = config.plot_dir / "03_umi_collapsed"
+    stage03_plot_dir = config['plot_dir'] / "03_umi_collapsed"
     stage03_plot_dir.mkdir(parents=True, exist_ok=True)
 
     scatter_df = pd.DataFrame(group_metrics_df_m2.select(["group_reads", "n_collapses"]).to_dicts())
     if not scatter_df.empty:
-        plt.figure(figsize=(7, 5), dpi=config.plot_dpi)
+        plt.figure(figsize=(7, 5), dpi=config['plot_dpi'])
         sns.scatterplot(data=scatter_df, x="group_reads", y="n_collapses", s=12)
         plt.xscale("log")
         plt.title("UMI collapse: reads vs collapses")
         plt.xlabel("Group reads")
         plt.ylabel("UMI collapses")
-        fn = stage03_plot_dir / f"{config.sample_name}_03_umi_collapsed_umi_collapse_scatter.png"
+        fn = stage03_plot_dir / f"{config['sample_name']}_03_umi_collapsed_umi_collapse_scatter.png"
         plt.tight_layout()
         plt.savefig(fn)
         plt.close()
-        print("Saved", fn)
+        log_print("Saved", fn)
 
     if collapse_events_df_m2.height > 0:
-        plt.figure(figsize=(8, 4), dpi=config.plot_dpi)
+        plt.figure(figsize=(8, 4), dpi=config['plot_dpi'])
         sns.histplot(collapse_events_df_m2["ratio"].to_list(), bins=100)
         plt.title("UMI collapse ratio (target/source)")
         plt.xlabel("Ratio")
         plt.ylabel("Collapse events")
-        fn = stage03_plot_dir / f"{config.sample_name}_03_umi_collapsed_umi_collapse_ratio_hist.png"
+        fn = stage03_plot_dir / f"{config['sample_name']}_03_umi_collapsed_umi_collapse_ratio_hist.png"
         plt.tight_layout()
         plt.savefig(fn)
         plt.close()
-        print("Saved", fn)
+        log_print("Saved", fn)
     else:
-        print("No UMI collapse events")
+        log_print("No UMI collapse events")
 
     top20 = pd.DataFrame(top20_pl.to_dicts())
     bottom20 = pd.DataFrame(bottom20_pl.to_dicts())
     if not top20.empty or not bottom20.empty:
-        fig, axes = plt.subplots(1, 2, figsize=(14, 8), dpi=config.plot_dpi)
+        fig, axes = plt.subplots(1, 2, figsize=(14, 8), dpi=config['plot_dpi'])
         if not top20.empty:
             sns.barplot(data=top20, y="feature_id", x="n_umi", ax=axes[0], color="#4c78a8")
         axes[0].set_title("Top 20 features by unique UMI")
@@ -1340,14 +1319,14 @@ def stage03_diagnostics(
         axes[1].set_title("Bottom 20 features by unique UMI")
         axes[1].set_xlabel("Unique UMI")
         axes[1].set_ylabel("")
-        fn = stage03_plot_dir / f"{config.sample_name}_03_umi_collapsed_feature_umi_top_bottom20.png"
+        fn = stage03_plot_dir / f"{config['sample_name']}_03_umi_collapsed_feature_umi_top_bottom20.png"
         plt.tight_layout()
         plt.savefig(fn)
         plt.close()
-        print("Saved", fn)
+        log_print("Saved", fn)
 
 
-def stage04_observed_collision(config: PipelineConfig, df_umi_m2: pl.DataFrame) -> pl.DataFrame:
+def stage04_observed_collision(config: PipelineConfigData, df_umi_m2: pl.DataFrame) -> pl.DataFrame:
     df_pair = df_umi_m2.with_columns((pl.col("cell_id") + pl.lit("|") + pl.col("umi")).alias("cell_umi"))
 
     feature_pair_m2 = (
@@ -1366,11 +1345,11 @@ def stage04_observed_collision(config: PipelineConfig, df_umi_m2: pl.DataFrame) 
             inter = len(set_a.intersection(pair_sets[fb]))
             obs_pair_mat[i, j] = 100.0 * inter / denom
 
-    if config.generate_graphs and len(features_pair) > 0:
-        stage04_plot_dir = config.plot_dir / "04_collision_resolved"
+    if config['generate_graphs'] and len(features_pair) > 0:
+        stage04_plot_dir = config['plot_dir'] / "04_collision_resolved"
         stage04_plot_dir.mkdir(parents=True, exist_ok=True)
         norm_obs = LogNorm(vmin=0.001, vmax=100)
-        plt.figure(figsize=(9, 7), dpi=config.plot_dpi * 4)
+        plt.figure(figsize=(9, 7), dpi=config['plot_dpi'] * 4)
         ax = sns.heatmap(
             np.where(obs_pair_mat <= 0, 1e-6, obs_pair_mat),
             cmap="rocket",
@@ -1382,12 +1361,12 @@ def stage04_observed_collision(config: PipelineConfig, df_umi_m2: pl.DataFrame) 
         cbar.set_ticks([0.001, 0.01, 0.1, 1, 10, 100])
         cbar.set_ticklabels(["0.001%", "0.01%", "0.1%", "1%", "10%", "100%"])
         plt.title("Observed (cell_id, umi) collision % (A by B)")
-        fn = stage04_plot_dir / f"{config.sample_name}_04_collision_resolved_observed_cell_umi_collision_heatmap.png"
+        fn = stage04_plot_dir / f"{config['sample_name']}_04_collision_resolved_observed_cell_umi_collision_heatmap.png"
         plt.tight_layout()
         plt.savefig(fn)
         plt.close()
-        print("Saved", fn)
-        print("Observed (cell_id, umi) heatmap dimensions:", obs_pair_mat.shape)
+        log_print("Saved", fn)
+        log_print("Observed (cell_id, umi) heatmap dimensions:", obs_pair_mat.shape)
 
     pair_stats = df_pair.group_by("cell_umi").agg(
         pl.n_unique("feature_id").alias("n_feat"),
@@ -1409,13 +1388,13 @@ def stage04_observed_collision(config: PipelineConfig, df_umi_m2: pl.DataFrame) 
             "pct_reads_collided": f"{(100.0 * reads_collided / max(reads_total, 1)):.4f}%",
         }
     )
-    print("Observed collision summary")
-    print(observed_collision_summary_df)
+    log_print("Observed collision summary")
+    log_print(observed_collision_summary_df)
     return observed_collision_summary_df
 
 
 def stage04_resolve(
-    config: PipelineConfig,
+    config: PipelineConfigData,
     df_umi_m2: pl.DataFrame,
     mhc_ref_df: pl.DataFrame,
     pep_ref_df: pl.DataFrame,
@@ -1459,7 +1438,7 @@ def stage04_resolve(
 
         if top_r == second_r:
             action, keep_f = "drop_all_tie", ""
-        elif top_r >= config.collision_min_top_reads and ratio > config.collision_min_ratio:
+        elif top_r >= config['collision_min_top_reads'] and ratio > config['collision_min_ratio']:
             action, keep_f = "keep_top", top_f
             for loser_f, loser_r in ranked[1:]:
                 if loser_r > 0:
@@ -1552,12 +1531,12 @@ def stage04_resolve(
         else empty_dataframe(_STAGE04_DIRECTED_RATIO_SCHEMA)
     )
 
-    collision_metrics_df_m2.write_parquet(config.parquet_04_collision_metrics)
-    print("Wrote", config.parquet_04_collision_metrics)
-    directed_ratio_df_m2.write_parquet(config.parquet_04_directed_ratio_events)
-    print("Wrote", config.parquet_04_directed_ratio_events)
-    df_final_m2.write_parquet(config.parquet_04)
-    print("Wrote", config.parquet_04)
+    collision_metrics_df_m2.write_parquet(config['parquet_04_collision_metrics'])
+    log_print("Wrote", config['parquet_04_collision_metrics'])
+    directed_ratio_df_m2.write_parquet(config['parquet_04_directed_ratio_events'])
+    log_print("Wrote", config['parquet_04_directed_ratio_events'])
+    df_final_m2.write_parquet(config['parquet_04'])
+    log_print("Wrote", config['parquet_04'])
 
     stage04_summary_df = metrics_mapping_df(
         {
@@ -1583,15 +1562,15 @@ def stage04_resolve(
 
 
 def stage04_diagnostics(
-    config: PipelineConfig,
+    config: PipelineConfigData,
     df_final_m2: pl.DataFrame,
     collision_metrics_df_m2: pl.DataFrame,
     directed_ratio_df_m2: pl.DataFrame,
 ) -> None:
-    print("Stage 04 diagnostics")
-    print("df_final_m2 shape=", df_final_m2.shape)
-    print("collision_metrics_df_m2 shape=", collision_metrics_df_m2.shape)
-    print("directed_ratio_df_m2 shape=", directed_ratio_df_m2.shape)
+    log_print("Stage 04 diagnostics")
+    log_print("df_final_m2 shape=", df_final_m2.shape)
+    log_print("collision_metrics_df_m2 shape=", collision_metrics_df_m2.shape)
+    log_print("directed_ratio_df_m2 shape=", directed_ratio_df_m2.shape)
 
     if directed_ratio_df_m2.height > 0:
         directed_count_df = (
@@ -1599,53 +1578,53 @@ def stage04_diagnostics(
             .agg(pl.len().alias("n_umi_collapsed"))
             .sort("n_umi_collapsed", descending=True)
         )
-        print("Top winner/loser feature pairs by collapsed UMI count:")
-        print(directed_count_df.head(20))
+        log_print("Top winner/loser feature pairs by collapsed UMI count:")
+        log_print(directed_count_df.head(20))
     else:
         directed_count_df = empty_dataframe(
             {"winner_feature": pl.String, "loser_feature": pl.String, "n_umi_collapsed": pl.Int64}
         )
-        print("No directed ratio rows; skipping collapsed-UMI top pairs")
+        log_print("No directed ratio rows; skipping collapsed-UMI top pairs")
 
-    if not config.generate_graphs:
+    if not config['generate_graphs']:
         return
 
-    stage04_plot_dir = config.plot_dir / "04_collision_resolved"
+    stage04_plot_dir = config['plot_dir'] / "04_collision_resolved"
     stage04_plot_dir.mkdir(parents=True, exist_ok=True)
 
     if collision_metrics_df_m2.height > 0:
-        plt.figure(figsize=(8, 4), dpi=config.plot_dpi)
+        plt.figure(figsize=(8, 4), dpi=config['plot_dpi'])
         sns.histplot(collision_metrics_df_m2["ratio"].to_list(), bins=100)
         plt.title("Collision ratio histogram (top / second)")
         plt.xlabel("Top / second ratio")
         plt.ylabel("Collision groups")
-        fn = stage04_plot_dir / f"{config.sample_name}_04_collision_resolved_collision_ratio_hist.png"
+        fn = stage04_plot_dir / f"{config['sample_name']}_04_collision_resolved_collision_ratio_hist.png"
         plt.tight_layout()
         plt.savefig(fn)
         plt.close()
-        print("Saved", fn)
+        log_print("Saved", fn)
     else:
-        print("No collision metrics rows; skipping ratio histogram")
+        log_print("No collision metrics rows; skipping ratio histogram")
 
     pair_reads_final = df_final_m2.group_by(["cell_id", "umi"]).agg(pl.sum("reads").alias("reads"))
     vals = pair_reads_final["reads"].to_numpy()
     vals = vals[vals > 0]
     if len(vals) > 0:
         bins = np.logspace(np.log10(vals.min()), np.log10(vals.max()), 80) if vals.min() != vals.max() else 80
-        plt.figure(figsize=(8, 4), dpi=config.plot_dpi)
+        plt.figure(figsize=(8, 4), dpi=config['plot_dpi'])
         sns.histplot(vals, bins=bins)
         plt.xscale("log")
         plt.yscale("log")
         plt.title("Reads per (cell_id, umi)")
         plt.xlabel("Reads")
         plt.ylabel("Count of (cell_id, umi)")
-        fn = stage04_plot_dir / f"{config.sample_name}_04_collision_resolved_reads_per_cellid_umi.png"
+        fn = stage04_plot_dir / f"{config['sample_name']}_04_collision_resolved_reads_per_cellid_umi.png"
         plt.tight_layout()
         plt.savefig(fn)
         plt.close()
-        print("Saved", fn)
+        log_print("Saved", fn)
     else:
-        print("No positive read values for (cell_id, umi) histogram")
+        log_print("No positive read values for (cell_id, umi) histogram")
 
     if directed_ratio_df_m2.height > 0:
         feature_order = (
@@ -1661,15 +1640,15 @@ def stage04_diagnostics(
             if winner in idx and loser in idx:
                 count_mat[idx[winner], idx[loser]] = float(row["n_umi_collapsed"])
 
-        plt.figure(figsize=(9, 7), dpi=config.plot_dpi * 3)
+        plt.figure(figsize=(9, 7), dpi=config['plot_dpi'] * 3)
         sns.heatmap(count_mat, cmap="magma", xticklabels=False, yticklabels=False)
         plt.title("Collapsed UMI count heatmap (winner <- loser)")
-        fn = stage04_plot_dir / f"{config.sample_name}_04_collision_resolved_directed_umi_count_heatmap.png"
+        fn = stage04_plot_dir / f"{config['sample_name']}_04_collision_resolved_directed_umi_count_heatmap.png"
         plt.tight_layout()
         plt.savefig(fn)
         plt.close()
-        print("Saved", fn)
-        print("Directed UMI-count heatmap dimensions:", count_mat.shape)
+        log_print("Saved", fn)
+        log_print("Directed UMI-count heatmap dimensions:", count_mat.shape)
 
 
 def stage05_summary(
@@ -1716,8 +1695,8 @@ def stage05_summary(
         previous_reads = stage_reads
 
     stage_flow_df = pl.DataFrame(stage_flow_rows)
-    print("Stage flow summary")
-    print(stage_flow_df)
+    log_print("Stage flow summary")
+    log_print(stage_flow_df)
 
     uniqueness_rows = []
     for stage_key in stage_order:
@@ -1737,8 +1716,8 @@ def stage05_summary(
             )
 
     uniqueness_df = pl.DataFrame(uniqueness_rows)
-    print("Key uniqueness summary")
-    print(uniqueness_df)
+    log_print("Key uniqueness summary")
+    log_print(uniqueness_df)
 
     reads_01 = stage_flow_rows[0]["total_reads"]
     reads_02 = stage_flow_rows[1]["total_reads"]
@@ -1754,21 +1733,22 @@ def stage05_summary(
         warnings.append("Stage 04 total_reads exceeds Stage 03 total_reads")
 
     if warnings:
-        print("Warnings")
+        log_print("Warnings")
         for warning in warnings:
-            print("-", warning)
+            log_print("-", warning)
     else:
-        print("Read-retention invariants passed")
+        log_print("Read-retention invariants passed")
 
     return stage_flow_df, uniqueness_df
 
 
-def run_pipeline(config: PipelineConfig) -> dict[str, Any]:
-    with pipeline_log_session(config.log_path):
-        print(f"STARforge log: {config.log_path}")
-        print(f"R1: {config.r1_fastq}")
-        print(f"R2: {config.r2_fastq}")
-        print(f"Output dir: {config.out_dir}")
+def run_pipeline(config: PipelineConfigData) -> dict[str, Any]:
+    start_pipeline_logging(config['log_path'])
+    try:
+        log_print(f"STARforge log: {config['log_path']}")
+        log_print(f"R1: {config['r1_fastq']}")
+        log_print(f"R2: {config['r2_fastq']}")
+        log_print(f"Output dir: {config['out_dir']}")
 
         mhc_ref_df, pep_ref_df, fb_ref_df = load_references(config)
         parsed_df, parse_qc, stage01_report = stage01_parse(config)
@@ -1798,3 +1778,5 @@ def run_pipeline(config: PipelineConfig) -> dict[str, Any]:
             "collision_metrics_df": collision_metrics_df_m2,
             "directed_ratio_df": directed_ratio_df_m2,
         }
+    finally:
+        stop_pipeline_logging()
